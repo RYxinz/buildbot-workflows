@@ -1,0 +1,48 @@
+name: Flutter ZIP2APK Build
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        required: true
+        default: 'FlutterApp'
+      job_id:
+        required: false
+      zip_url:
+        description: 'Direct download URL of the Flutter ZIP'
+        required: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          channel: 'stable'
+          cache: true
+      - name: Download & extract ZIP
+        run: |
+          curl -L "${{ inputs.zip_url }}" -o project.zip
+          mkdir flutter_project
+          unzip -q project.zip -d flutter_project
+          INNER=$(find flutter_project -name "pubspec.yaml" -maxdepth 3 | head -1 | xargs dirname)
+          echo "PROJECT_DIR=$INNER" >> $GITHUB_ENV
+      - uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ hashFiles('**/pubspec.lock') }}
+      - run: cd "$PROJECT_DIR" && flutter pub get
+      - run: cd "$PROJECT_DIR" && flutter build apk --release --no-tree-shake-icons
+      - name: Rename & upload APK
+        run: |
+          SAFE=$(echo "${{ inputs.app_name }}" | tr ' ' '_')
+          cp "$PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk" "/tmp/${SAFE}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-flutter-${{ inputs.job_id }}-${{ github.run_number }}
+          path: /tmp/${{ inputs.app_name }}.apk
+          retention-days: 3
