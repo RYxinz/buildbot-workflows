@@ -29,18 +29,55 @@ jobs:
         run: |
           set -e
           flutter config --no-analytics
+
           curl -L "${{ inputs.zip_url }}" -o project.zip
           mkdir -p flutter_src
           unzip -q project.zip -d flutter_src
+
           PUBSPEC=$(find flutter_src -name "pubspec.yaml" -maxdepth 4 | head -1)
           [ -z "$PUBSPEC" ] && echo "❌ pubspec.yaml not found" && exit 1
           PROJECT_DIR=$(dirname "$PUBSPEC")
           cd "$PROJECT_DIR"
-          flutter pub add font_awesome_flutter:^11.0.0 2>/dev/null || true
+
+          echo "=== pubspec.yaml (before patch) ==="
+          cat pubspec.yaml
+
+          # Hard-patch font_awesome_flutter — ganti semua format yang mungkin
+          # Format: "  font_awesome_flutter: 10.9.1" atau "  font_awesome_flutter: ^10.9.1" dll
+          python3 - << 'PYEOF'
+import re, sys
+
+with open('pubspec.yaml', 'r') as f:
+    content = f.read()
+
+patches = {
+    r'(font_awesome_flutter\s*:\s*)[\^~]?\d[\d.]*': r'\g<1>^11.0.0',
+    r'(carousel_slider\s*:\s*)[\^~]?\d[\d.]*': r'\g<1>^5.0.0',
+}
+
+for pattern, replacement in patches.items():
+    new_content = re.sub(pattern, replacement, content)
+    if new_content != content:
+        print(f"✅ Patched: {pattern}")
+    content = new_content
+
+with open('pubspec.yaml', 'w') as f:
+    f.write(content)
+PYEOF
+
+          echo "=== pubspec.yaml (after patch) ==="
+          grep -E "font_awesome|carousel" pubspec.yaml || echo "(not found)"
+
+          flutter pub get
           flutter pub upgrade --major-versions 2>/dev/null || true
           flutter pub get
-          flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation
+
+          flutter build apk --release \
+            --no-tree-shake-icons \
+            --android-skip-build-dependency-validation
+
           cp build/app/outputs/flutter-apk/app-release.apk /tmp/output.apk
+          echo "✅ APK: $(du -sh /tmp/output.apk)"
 
       - uses: actions/upload-artifact@v4
         with:
