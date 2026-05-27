@@ -24,23 +24,23 @@ jobs:
       - name: Setup Flutter (latest stable)
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'    # selalu ambil versi terbaru, tidak pin
+          channel: 'stable'
           cache: true
 
-      - name: Download, extract & build APK
+      - name: Download, patch & build APK
         run: |
           set -e
+          echo "Flutter: $(flutter --version | head -1)"
 
-          echo "Flutter version: $(flutter --version | head -1)"
-
+          # Download & extract ZIP
           curl -L "${{ inputs.zip_url }}" -o project.zip
           mkdir -p flutter_src
           unzip -q project.zip -d flutter_src
 
           PUBSPEC=$(find flutter_src -name "pubspec.yaml" -maxdepth 4 | head -1)
           if [ -z "$PUBSPEC" ]; then
-            echo "❌ pubspec.yaml tidak ditemukan! Isi ZIP:"
-            find flutter_src -type f | head -30
+            echo "❌ pubspec.yaml tidak ditemukan!"
+            find flutter_src -type f | head -20
             exit 1
           fi
 
@@ -48,14 +48,36 @@ jobs:
           echo "✅ Project: $PROJECT_DIR"
           cd "$PROJECT_DIR"
 
-          # Disable analytics biar tidak hang
+          # ── Auto-patch dependency yang tidak kompatibel dengan Flutter terbaru ──
+          echo "🔧 Patching incompatible dependencies..."
+
+          # font_awesome_flutter: 10.x tidak kompatibel dengan Flutter 3.44+ (IconData jadi final)
+          if grep -q "font_awesome_flutter" pubspec.yaml; then
+            echo "  → Upgrade font_awesome_flutter ke ^11.0.0"
+            sed -i 's/font_awesome_flutter:.*$/font_awesome_flutter: ^11.0.0/' pubspec.yaml
+          fi
+
+          # carousel_slider: upgrade ke versi yang support null safety terbaru
+          if grep -q "carousel_slider:" pubspec.yaml; then
+            echo "  → Upgrade carousel_slider ke ^5.0.0"
+            sed -i 's/carousel_slider:.*$/carousel_slider: ^5.0.0/' pubspec.yaml
+          fi
+
+          # http: 0.x → 1.x (breaking change API tapi pub get handle ini)
+          # Biarkan pub upgrade yang handle
+
+          # Skip build dependency validation untuk warning Gradle/AGP/Kotlin versi lama
           flutter config --no-analytics
 
           flutter pub get
-          flutter build apk --release --no-tree-shake-icons
+          flutter pub upgrade --major-versions 2>/dev/null || true
+
+          flutter build apk --release \
+            --no-tree-shake-icons \
+            --android-skip-build-dependency-validation
 
           cp build/app/outputs/flutter-apk/app-release.apk /tmp/output.apk
-          echo "✅ APK: $(du -sh /tmp/output.apk)"
+          echo "✅ APK size: $(du -sh /tmp/output.apk)"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
