@@ -3,10 +3,8 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Website URL'
         required: true
       app_name:
-        description: 'App name'
         required: true
         default: 'MyApp'
       job_id:
@@ -24,12 +22,11 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - name: Install Gradle via SDKMAN
+      - name: Install Gradle
         run: |
-          curl -s "https://get.sdkman.io" | bash
-          source "$HOME/.sdkman/bin/sdkman-init.sh"
-          sdk install gradle 8.4
-          echo "$HOME/.sdkman/candidates/gradle/current/bin" >> $GITHUB_PATH
+          curl -sL "https://services.gradle.org/distributions/gradle-8.4-bin.zip" -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp/gradle-dist
+          echo "/tmp/gradle-dist/gradle-8.4/bin" >> $GITHUB_PATH
 
       - name: Generate & Build WebView APK
         run: |
@@ -38,8 +35,7 @@ jobs:
           APP_NAME="${{ inputs.app_name }}"
           PKG="com.buildbot.$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
           OUT="webview_project"
-
-          mkdir -p "$OUT/app/src/main/res/values"
+          mkdir -p "$OUT/app/src/main/res/values" "$OUT/gradle/wrapper"
 
           printf 'rootProject.name = "%s"\ninclude ":app"\n' "$APP_NAME" > "$OUT/settings.gradle"
 
@@ -51,6 +47,14 @@ buildscript {
 allprojects { repositories { google(); mavenCentral() } }
 GRADLE
 
+          cat > "$OUT/gradle/wrapper/gradle-wrapper.properties" << 'GRADLE'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+GRADLE
+
           cat > "$OUT/app/build.gradle" << GRADLE
 plugins { id 'com.android.application' }
 android {
@@ -58,30 +62,18 @@ android {
   compileSdk 34
   defaultConfig {
     applicationId '$PKG'
-    minSdk 21
-    targetSdk 34
-    versionCode 1
-    versionName '1.0'
+    minSdk 21; targetSdk 34; versionCode 1; versionName '1.0'
   }
-  buildTypes {
-    release {
-      minifyEnabled false
-      signingConfig signingConfigs.debug
-    }
-  }
+  buildTypes { release { minifyEnabled false; signingConfig signingConfigs.debug } }
 }
-dependencies {
-  implementation 'androidx.appcompat:appcompat:1.6.1'
-}
+dependencies { implementation 'androidx.appcompat:appcompat:1.6.1' }
 GRADLE
 
           cat > "$OUT/app/src/main/AndroidManifest.xml" << XML
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET"/>
-  <application
-    android:label="$APP_NAME"
-    android:usesCleartextTraffic="true"
+  <application android:label="$APP_NAME" android:usesCleartextTraffic="true"
     android:theme="@style/Theme.AppCompat.Light.NoActionBar">
     <activity android:name=".MainActivity" android:exported="true"
       android:configChanges="orientation|keyboardHidden|screenSize">
@@ -98,31 +90,24 @@ XML
           mkdir -p "$JPATH"
           cat > "$JPATH/MainActivity.java" << JAVA
 package $PKG;
-import android.os.Bundle;
-import android.webkit.*;
+import android.os.Bundle; import android.webkit.*;
 import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity {
   @Override protected void onCreate(Bundle b) {
     super.onCreate(b);
-    WebView wv = new WebView(this);
-    setContentView(wv);
+    WebView wv = new WebView(this); setContentView(wv);
     WebSettings ws = wv.getSettings();
-    ws.setJavaScriptEnabled(true);
-    ws.setDomStorageEnabled(true);
-    ws.setLoadWithOverviewMode(true);
-    ws.setUseWideViewPort(true);
-    wv.setWebViewClient(new WebViewClient());
-    wv.loadUrl("$APP_URL");
+    ws.setJavaScriptEnabled(true); ws.setDomStorageEnabled(true);
+    ws.setLoadWithOverviewMode(true); ws.setUseWideViewPort(true);
+    wv.setWebViewClient(new WebViewClient()); wv.loadUrl("$APP_URL");
   }
 }
 JAVA
 
-          # Pakai gradle langsung dari system — no wrapper needed
           cd "$OUT"
           gradle assembleRelease --no-daemon
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: apk-web-${{ inputs.job_id }}-${{ github.run_number }}
           path: webview_project/app/build/outputs/apk/release/app-release.apk
